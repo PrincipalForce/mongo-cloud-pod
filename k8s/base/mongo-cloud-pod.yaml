@@ -218,11 +218,15 @@ spec:
     spec:
       
       automountServiceAccountToken: false
+      # gateway.podSecurityContext overrides the shared one, because the
+      # FerretDB image's user is uid 1000 while both database images use 999.
+      # fsGroup has to match the running uid or the /state emptyDir below is
+      # not writable and the gateway exits 1 on startup.
       securityContext:
-        fsGroup: 999
-        runAsGroup: 999
+        fsGroup: 1000
+        runAsGroup: 1000
         runAsNonRoot: true
-        runAsUser: 999
+        runAsUser: 1000
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -262,6 +266,13 @@ spec:
               value: "0.0.0.0:8088"
             - name: FERRETDB_TELEMETRY
               value: "disable"
+            # FerretDB persists a small state file (instance UUID, telemetry
+            # bookkeeping) and exits 1 if it cannot write it. The image
+            # defaults to /state, which a read-only root filesystem makes
+            # unwritable — so the directory is an explicit emptyDir below and
+            # the path is pinned here rather than left to the image's default.
+            - name: FERRETDB_STATE_DIR
+              value: /state
           startupProbe:
             # The gateway comes up before Postgres is ready and retries its
             # connection, so the only useful early signal is "is it listening".
@@ -302,8 +313,14 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: state
+              mountPath: /state
       volumes:
         - name: tmp
+          emptyDir: {}
+        # Not a PVC: the state file is per-instance bookkeeping, not data.
+        # Losing it on reschedule costs nothing — the gateway writes a new one.
+        - name: state
           emptyDir: {}
 ---
 # Source: mongo-cloud-pod/templates/postgres-statefulset.yaml
@@ -395,6 +412,21 @@ spec:
             # contains lost+found, and initdb refuses a non-empty directory.
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
+            # For pg_isready in the probes below. Probe exec commands get no
+            # $(VAR) expansion, so the username cannot be passed as -U — but
+            # libpq reads PGUSER/PGDATABASE from the environment. Without
+            # these, pg_isready connects as the non-existent role "postgres"
+            # and the server logs a FATAL every ten seconds forever. The probe
+            # still passes (the server is accepting connections, which is what
+            # it asks), so the only symptom is a log full of authentication
+            # failures that look like an intrusion attempt.
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: mongo-cloud-pod
+                  key: username
+            - name: PGDATABASE
+              value: postgres
           startupProbe:
             # initdb plus the DocumentDB extension install can take a while on
             # a cold volume with slow storage. A generous startup probe is what

@@ -83,6 +83,21 @@ spec:
             # contains lost+found, and initdb refuses a non-empty directory.
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
+            # For pg_isready in the probes below. Probe exec commands get no
+            # $(VAR) expansion, so the username cannot be passed as -U — but
+            # libpq reads PGUSER/PGDATABASE from the environment. Without
+            # these, pg_isready connects as the non-existent role "postgres"
+            # and the server logs a FATAL every ten seconds forever. The probe
+            # still passes (the server is accepting connections, which is what
+            # it asks), so the only symptom is a log full of authentication
+            # failures that look like an intrusion attempt.
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mongo-cloud-pod.secretName" . }}
+                  key: username
+            - name: PGDATABASE
+              value: postgres
             {{- with .Values.postgres.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

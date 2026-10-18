@@ -70,6 +70,16 @@ gateway:
   # Send usage telemetry to FerretDB Inc.? Off by default — a database should
   # not phone home unless its operator opts in.
   telemetry: false
+  # Overrides the shared podSecurityContext for this component only. The
+  # FerretDB image runs as uid 1000; both database images use 999. fsGroup
+  # must match the running uid, or the /state emptyDir the gateway writes its
+  # instance file to is not writable and the container exits 1 at startup —
+  # which Docker hides, because the image declares VOLUME /state and Docker
+  # silently grants it a writable anonymous volume. Kubernetes does not.
+  podSecurityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
   # FerretDB's debug/metrics listener. Not exposed through the Service.
   debugPort: 8088
   resources:

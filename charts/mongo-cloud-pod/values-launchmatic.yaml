@@ -68,11 +68,23 @@ automountServiceAccountToken: false
 backup:
   enabled: true
   schedule: "0 3 * * *"
-  target: s3
+  # PVC, not S3, as the preset default — deliberately, so this file renders on
+  # its own. An S3 target needs a bucket and a credentials Secret, and a
+  # preset that ships `target: s3` with an empty bucket fails the render for
+  # anyone who applies it unmodified.
+  #
+  # For a platform, S3 is the right target. Add at install time:
+  #   --set backup.target=s3 \
+  #   --set backup.s3.bucket=<bucket> \
+  #   --set backup.s3.prefix=teams/<slug>/db/<instanceId> \
+  #   --set backup.s3.existingSecret=<credentials secret>
+  target: pvc
   retentionCount: 7
+  pvc:
+    size: 20Gi
   s3:
-    # Per-tenant prefix, matching the platform's backup-storage-key convention.
     bucket: ""
+    # Per-tenant prefix, matching the platform's backup-storage-key convention.
     prefix: "mongo-cloud-pod"
     existingSecret: ""
 

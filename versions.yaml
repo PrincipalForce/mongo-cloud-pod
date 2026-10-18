@@ -33,7 +33,7 @@ engines:
         versions:
           - version: "2"
             image: ghcr.io/ferretdb/ferretdb:2
-            pinned: ghcr.io/ferretdb/ferretdb:2.6.0
+            pinned: ghcr.io/ferretdb/ferretdb:2.7.0
             license: Apache-2.0
             eol: "2027-06-30"
             status: default
@@ -45,14 +45,14 @@ engines:
         versions:
           - version: "17"
             image: ghcr.io/ferretdb/postgres-documentdb:17
-            pinned: ghcr.io/ferretdb/postgres-documentdb:17-0.106.0-ferretdb-2.6.0
+            pinned: ghcr.io/ferretdb/postgres-documentdb:17-0.107.0-ferretdb-2.7.0
             license: PostgreSQL AND MIT
             eol: "2029-11-08"
             status: default
             label: Postgres 17 + DocumentDB
           - version: "16"
             image: ghcr.io/ferretdb/postgres-documentdb:16
-            pinned: ghcr.io/ferretdb/postgres-documentdb:16-0.106.0-ferretdb-2.6.0
+            pinned: ghcr.io/ferretdb/postgres-documentdb:16-0.107.0-ferretdb-2.7.0
             license: PostgreSQL AND MIT
             eol: "2028-11-09"
             status: available

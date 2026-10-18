@@ -46,9 +46,9 @@ images:
   # releases on every pod restart, which is what you want for CVEs and not
   # what you want during an incident.
   - name: ghcr.io/ferretdb/postgres-documentdb
-    newTag: 17-0.106.0-ferretdb-2.6.0
+    newTag: 17-0.107.0-ferretdb-2.7.0
   - name: ghcr.io/ferretdb/ferretdb
-    newTag: 2.6.0
+    newTag: 2.7.0
 
 replicas:
   - name: mongo-cloud-pod-gateway
