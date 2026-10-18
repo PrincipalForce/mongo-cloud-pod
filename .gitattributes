@@ -1,0 +1,14 @@
+# Normalise to LF in the repository. Without this, a clone on Windows checks
+# scripts out with CRLF, and a CRLF shebang line fails on Linux with the
+# singularly unhelpful "/usr/bin/env: 'bash\r': No such file or directory" —
+# including inside CI, which runs these scripts.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.tpl  text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+
+# Keep generated output out of PR diffs by default; it is still reviewable
+# with `git diff -- k8s/base`, and CI verifies it matches the chart.
+k8s/base/mongo-cloud-pod.yaml linguist-generated=true
