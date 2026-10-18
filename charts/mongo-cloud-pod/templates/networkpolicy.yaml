@@ -1,0 +1,105 @@
+{{- include "mongo-cloud-pod.validate" . -}}
+{{- if .Values.networkPolicy.enabled }}
+{{/*
+Default-deny on the way in, allow-list on top. A database reachable from every
+pod in the cluster is how most of these end up compromised — one vulnerable
+sidecar anywhere is enough.
+
+NOTE: NetworkPolicy is enforced by the CNI. On a cluster without a policy-aware
+CNI (plain kindnet, some managed defaults) these objects are accepted by the
+API server and silently do nothing. Verify before relying on them.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mongo-cloud-pod.fullname" . }}-endpoint
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      mongo-cloud-pod.io/endpoint: "true"
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+    {{- if not .Values.networkPolicy.allowAllEgress }}
+    - Egress
+    {{- end }}
+  ingress:
+    - from:
+        # Same namespace, always — this is where the application that owns the
+        # database normally lives.
+        - podSelector: {}
+        {{- range .Values.networkPolicy.allowedNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+        {{- end }}
+        {{- with .Values.networkPolicy.extraFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 27017
+  {{- if not .Values.networkPolicy.allowAllEgress }}
+  egress:
+    {{- if eq .Values.engine "ferretdb" }}
+    # The gateway's only legitimate outbound destination.
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "mongo-cloud-pod.selectorLabels" (dict "ctx" . "component" "storage") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    {{- end }}
+    # DNS. Without this, locking down egress breaks service resolution and the
+    # failure looks like an unrelated connection timeout.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+  {{- end }}
+{{- if eq .Values.engine "ferretdb" }}
+---
+{{/*
+The storage node accepts connections from the gateway and from backup jobs
+only. Nothing in the cluster should be speaking SQL to it directly.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "mongo-cloud-pod.fullname" . }}-storage
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mongo-cloud-pod.selectorLabels" (dict "ctx" . "component" "storage") | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "mongo-cloud-pod.selectorLabels" (dict "ctx" . "component" "gateway") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "mongo-cloud-pod.selectorLabels" (dict "ctx" . "component" "backup") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}
+{{- end }}

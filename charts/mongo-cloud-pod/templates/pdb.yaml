@@ -1,0 +1,24 @@
+{{- include "mongo-cloud-pod.validate" . -}}
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- if and (eq .Values.engine "ferretdb") (lt (int .Values.gateway.replicaCount) 2) }}
+{{- fail "mongo-cloud-pod: podDisruptionBudget.enabled requires gateway.replicaCount >= 2 — a PDB over a single replica blocks node drains forever instead of protecting anything." }}
+{{- end }}
+{{- if eq .Values.engine "mongodb-community" }}
+{{- fail "mongo-cloud-pod: podDisruptionBudget is not supported for engine mongodb-community — it is a single-writer StatefulSet, and a PDB over it would block node drains without improving availability." }}
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "mongo-cloud-pod.gatewayName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "mongo-cloud-pod.selectorLabels" (dict "ctx" . "component" "gateway") | nindent 6 }}
+{{- end }}

@@ -1,0 +1,203 @@
+# mongo-cloud-pod — platform descriptor
+#
+# The machine-readable contract for platforms that provision databases from a
+# catalog entry rather than by running `helm`. Launchmatic's db-worker, for
+# example, builds a StatefulSet in TypeScript; everything it needs to render one
+# is here, so it never has to hardcode an image tag, a data path or a
+# connection-string shape. See docs/launchmatic.md.
+#
+# Stability: fields under `spec` are additive-only within a major `apiVersion`.
+
+apiVersion: pod.launchmatic.com/v1
+kind: DatabasePod
+
+metadata:
+  name: mongo-cloud-pod
+  displayName: MongoDB-compatible (open licence)
+  engineId: MONGODB_COMPATIBLE
+  repository: https://github.com/PrincipalForce/mongo-cloud-pod
+  license: Apache-2.0
+  summary: >-
+    MongoDB wire-protocol database on port 27017 with no SSPL component.
+    FerretDB (Apache-2.0) over PostgreSQL (PostgreSQL licence) with the
+    DocumentDB extension (MIT).
+  # Drivers that connect unchanged. Anything speaking MongoDB 5.0+ wire
+  # protocol works; this list is what CI actually exercises.
+  verifiedClients:
+    - mongosh 2.x
+    - mongodb (Node.js driver) 6.x
+    - mongoose 8.x
+    - pymongo 4.x
+    - go.mongodb.org/mongo-driver v1.17.x
+    - Spring Data MongoDB 4.x
+
+spec:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Variants. A platform picks one; `ferretdb` is the only one safe to offer to
+  # third-party tenants. `mongodb-community` exists for single-tenant,
+  # self-hosted use and MUST NOT be exposed in a multi-tenant catalog without
+  # the operator accepting SSPL §13 themselves.
+  # ──────────────────────────────────────────────────────────────────────────
+  variants:
+    - id: ferretdb
+      default: true
+      offerableAsService: true
+      licenses: [Apache-2.0, MIT, PostgreSQL]
+      sspl: false
+      # Two workloads: a stateless gateway and a stateful storage node.
+      workloads:
+        - name: storage
+          kind: StatefulSet
+          imageRef: engines.ferretdb.components.storage   # resolve in versions.yaml
+          port: 5432
+          dataPath: /var/lib/postgresql/data
+          runAsUser: 999
+          fsGroup: 999
+          env:
+            POSTGRES_USER: "{{ username }}"
+            POSTGRES_PASSWORD: "{{ password }}"
+            # DocumentDB installs its extension into the `postgres` database.
+            # Changing this breaks gateway startup — the tenant's logical
+            # database is created inside Postgres by FerretDB, not here.
+            POSTGRES_DB: postgres
+            PGDATA: /var/lib/postgresql/data/pgdata
+          probe:
+            exec: ["pg_isready", "-U", "{{ username }}", "-d", "postgres"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            cpuRequest: 100m
+            cpuLimit: "1"
+            memoryRequest: 256Mi
+            memoryLimit: 1Gi
+        - name: gateway
+          kind: Deployment
+          replicas: 1              # stateless; raise for HA
+          imageRef: engines.ferretdb.components.gateway
+          port: 27017
+          endpoint: true           # the Service on 27017 selects this workload
+          debugPort: 8088
+          env:
+            FERRETDB_POSTGRESQL_URL: "postgres://{{ username }}:{{ password }}@{{ storageHost }}:5432/postgres"
+            FERRETDB_TELEMETRY: disable
+            FERRETDB_LISTEN_ADDR: "0.0.0.0:27017"
+          probe:
+            tcpSocket: 27017
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            cpuRequest: 50m
+            cpuLimit: 500m
+            memoryRequest: 128Mi
+            memoryLimit: 512Mi
+
+    - id: mongodb-community
+      default: false
+      offerableAsService: false
+      licenses: [SSPL-1.0]
+      sspl: true
+      requiresAcknowledgement: true
+      acknowledgementText: >-
+        MongoDB Community Server is licensed under the SSPL, which is not an
+        OSI-approved open-source licence. SSPL §13 requires anyone who offers
+        the program's functionality to third parties as a service to release
+        the complete source of that service under the SSPL. By enabling this
+        variant you confirm the deployment is for your own first-party use and
+        that you accept MongoDB, Inc.'s licence terms directly.
+      workloads:
+        - name: server
+          kind: StatefulSet
+          imageRef: engines.mongodb-community.components.server
+          port: 27017
+          endpoint: true
+          dataPath: /data/db
+          runAsUser: 999
+          fsGroup: 999
+          env:
+            MONGO_INITDB_ROOT_USERNAME: "{{ username }}"
+            MONGO_INITDB_ROOT_PASSWORD: "{{ password }}"
+            MONGO_INITDB_DATABASE: "{{ database }}"
+          probe:
+            tcpSocket: 27017
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            cpuRequest: 100m
+            cpuLimit: "1"
+            memoryRequest: 512Mi
+            memoryLimit: 2Gi
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # What the platform hands the application. Identical shape for both variants,
+  # which is the point: switching variants does not change app code.
+  # ──────────────────────────────────────────────────────────────────────────
+  connection:
+    protocol: mongodb
+    port: 27017
+    # `authSource=admin` applies only to mongodb-community, where the root user
+    # lives in the `admin` database. FerretDB authenticates against the
+    # Postgres role, so an authSource would be ignored at best.
+    templates:
+      ferretdb: "mongodb://{{ username }}:{{ password }}@{{ host }}:27017/{{ database }}"
+      mongodb-community: "mongodb://{{ username }}:{{ password }}@{{ host }}:27017/{{ database }}?authSource=admin"
+    secretKeys:
+      - username
+      - password
+      - database
+      - host
+      - connectionString
+
+  credentials:
+    usernameDefault: mongouser
+    databaseDefault: appdb
+    passwordPolicy:
+      length: 24
+      # Alphanumeric only, deliberately: the password is interpolated into a
+      # URI (both the mongodb:// string handed to the app and the postgres://
+      # string handed to the gateway). Percent-encoding bugs in that path are
+      # a class of outage not worth the extra entropy.
+      charset: alphanumeric
+
+  storage:
+    defaultSizeGi: 10
+    accessModes: [ReadWriteOnce]
+    # Shrinking a PVC is not possible on any common CSI driver. Platforms
+    # should treat this as a one-way ratchet in their UI.
+    resizable: true
+    shrinkable: false
+
+  backup:
+    ferretdb:
+      # Back up the Postgres volume, not the Mongo view of it. pg_dump captures
+      # the DocumentDB BSON tables consistently; mongodump against the gateway
+      # also works but is slower and does not capture index definitions the
+      # extension stores out of band.
+      dump: ["pg_dump", "--format=custom", "--dbname=postgres", "--file={{ target }}"]
+      restore: ["pg_restore", "--clean", "--if-exists", "--dbname=postgres", "{{ source }}"]
+      targetExtension: .dump
+      containerName: storage
+    mongodb-community:
+      dump: ["mongodump", "--archive={{ target }}", "--gzip", "--username={{ username }}", "--password={{ password }}", "--authenticationDatabase=admin"]
+      restore: ["mongorestore", "--archive={{ source }}", "--gzip", "--drop", "--username={{ username }}", "--password={{ password }}", "--authenticationDatabase=admin"]
+      targetExtension: .archive.gz
+      containerName: server
+
+  # Behaviour a platform should surface to users before they pick a variant.
+  # The authoritative, detailed list lives in docs/compatibility.md.
+  compatibility:
+    ferredbUnsupported:
+      - change streams (watch)
+      - sharding / mongos
+      - $out and $merge aggregation stages
+      - GridFS (no server-side support; client-side chunking works)
+      - server-side JavaScript ($where, mapReduce)
+    ferretdbPartial:
+      - multi-document transactions (single-shard semantics, no retryable writes)
+      - collation (limited locale support)
+      - explain (plan shape differs from MongoDB's)
+
+  helm:
+    chart: charts/mongo-cloud-pod
+    ociRef: oci://ghcr.io/principalforce/charts/mongo-cloud-pod
+    valuesPresets:
+      launchmatic: charts/mongo-cloud-pod/values-launchmatic.yaml

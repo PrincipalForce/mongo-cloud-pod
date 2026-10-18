@@ -1,0 +1,160 @@
+{{- include "mongo-cloud-pod.validate" . -}}
+{{- if eq .Values.engine "ferretdb" }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "mongo-cloud-pod.postgresName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+spec:
+  # Single writer. DocumentDB stores BSON in regular Postgres tables, so HA
+  # here means Postgres HA (streaming replication / CloudNativePG), not more
+  # replicas of this StatefulSet — two pods on one RWO volume will not start,
+  # and two pods on two volumes are two unrelated databases.
+  replicas: 1
+  serviceName: {{ include "mongo-cloud-pod.postgresName" . }}
+  selector:
+    matchLabels:
+      {{- include "mongo-cloud-pod.selectorLabels" (dict "ctx" . "component" "storage") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mongo-cloud-pod.labels" . | nindent 8 }}
+        app.kubernetes.io/component: storage
+      annotations:
+        {{- include "mongo-cloud-pod.annotations" . | nindent 8 }}
+        {{- with .Values.postgres.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- include "mongo-cloud-pod.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.postgres.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgres.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.postgres.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Postgres needs time to finish a checkpoint. The default 30s is enough
+      # for small databases; raise it if you see "database system was not
+      # properly shut down" in the logs after a node drain.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: storage
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          {{- with .Values.postgres.extraArgs }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mongo-cloud-pod.secretName" . }}
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mongo-cloud-pod.secretName" . }}
+                  key: password
+            # Not the tenant's database. DocumentDB installs its extension into
+            # `postgres`, and FerretDB creates the tenant's logical database
+            # inside it on first write. Pointing this at auth.database leaves
+            # the extension in a database the gateway never opens.
+            - name: POSTGRES_DB
+              value: postgres
+            # Keep PGDATA in a subdirectory of the mount: a PVC root often
+            # contains lost+found, and initdb refuses a non-empty directory.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            {{- with .Values.postgres.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            # initdb plus the DocumentDB extension install can take a while on
+            # a cold volume with slow storage. A generous startup probe is what
+            # keeps the liveness probe from killing a first boot mid-initdb.
+            #
+            # No -U: probe exec commands get no $(VAR) expansion from the
+            # container's env (unlike command/args), so the username is not
+            # available here. pg_isready without it still answers the only
+            # question a probe asks — is the server accepting connections.
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432"]
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            # 5 failures, not 3: a long vacuum or checkpoint can make
+            # pg_isready slow without the server being unhealthy, and
+            # restarting a busy database makes that worse.
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.postgres.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            # Postgres writes sockets and temp files here; the image's default
+            # tmpfs-less setup would otherwise need a writable /run.
+            - name: run
+              mountPath: /var/run/postgresql
+      volumes:
+        - name: run
+          emptyDir: {}
+        {{- if not .Values.postgres.persistence.enabled }}
+        # Ephemeral storage. Fine for CI, data loss on every reschedule.
+        - name: data
+          emptyDir: {}
+        {{- end }}
+  {{- if .Values.postgres.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "mongo-cloud-pod.labels" . | nindent 10 }}
+          app.kubernetes.io/component: storage
+        {{- if .Values.postgres.persistence.retainOnDelete }}
+        annotations:
+          # StatefulSet PVCs already survive `helm uninstall`; this makes the
+          # intent explicit and survives a future switch to Helm-managed PVCs.
+          helm.sh/resource-policy: keep
+        {{- end }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.postgres.persistence.accessModes | nindent 10 }}
+        {{- if .Values.postgres.persistence.storageClass }}
+        storageClassName: {{ .Values.postgres.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.persistence.size }}
+  {{- end }}
+{{- end }}

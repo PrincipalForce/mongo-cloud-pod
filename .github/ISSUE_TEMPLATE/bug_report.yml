@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in the chart, manifests or scripts behaves incorrectly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a *compatibility* gap — a MongoDB feature that doesn't work — use
+        the "Compatibility gap" template instead.
+
+        For a security issue, do not file here: see SECURITY.md.
+  - type: input
+    id: chart-version
+    attributes:
+      label: Chart version
+      placeholder: "0.1.0 (helm list -n <namespace>)"
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Engine
+      options: [ferretdb, mongodb-community]
+    validations:
+      required: true
+  - type: input
+    id: k8s
+    attributes:
+      label: Kubernetes version and distribution
+      placeholder: "v1.31.0, GKE / kind / k3s / EKS"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Include the exact command and its output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Storage logs are usually the real cause of a gateway failure:
+        kubectl logs statefulset/<release>-mongo-cloud-pod-postgres --tail=100
+      render: shell

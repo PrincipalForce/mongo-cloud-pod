@@ -1,0 +1,21 @@
+# Local environment
+.env
+.env.local
+
+# Helm
+*.tgz
+charts/*/charts/
+charts/*/Chart.lock
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Scratch
+/tmp/
+*.dump
+*.archive.gz
+kubeconfig

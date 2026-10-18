@@ -1,0 +1,155 @@
+{{- include "mongo-cloud-pod.validate" . -}}
+{{- if eq .Values.engine "mongodb-community" }}
+{{/*
+SSPL engine. Reaching this template at all means the operator set
+sspl.acknowledged=true; mongo-cloud-pod.validate fails the render otherwise.
+Nothing here is distributed by this project — the image is pulled from MongoDB
+Inc.'s registry at deploy time and governed by their licence directly.
+*/}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "mongo-cloud-pod.mongodbName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+    # Greppable across a fleet: `kubectl get sts -A -o json | jq '…"mongo-cloud-pod.io/license"'`
+    # tells you every place an SSPL workload is running.
+    mongo-cloud-pod.io/license: SSPL-1.0
+    mongo-cloud-pod.io/offerable-as-service: "false"
+spec:
+  replicas: 1
+  serviceName: {{ include "mongo-cloud-pod.mongodbName" . }}
+  selector:
+    matchLabels:
+      {{- include "mongo-cloud-pod.selectorLabels" (dict "ctx" . "component" "server") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mongo-cloud-pod.labels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+        mongo-cloud-pod.io/endpoint: "true"
+      annotations:
+        {{- include "mongo-cloud-pod.annotations" . | nindent 8 }}
+        {{- with .Values.mongodb.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- include "mongo-cloud-pod.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.mongodb.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mongodb.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.mongodb.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: server
+          image: "{{ .Values.mongodb.image.repository }}:{{ .Values.mongodb.image.tag }}"
+          imagePullPolicy: {{ .Values.mongodb.image.pullPolicy }}
+          args:
+            - --bind_ip_all
+            {{- if .Values.mongodb.wiredTigerCacheSizeGB }}
+            - --wiredTigerCacheSizeGB
+            - {{ .Values.mongodb.wiredTigerCacheSizeGB | quote }}
+            {{- end }}
+            {{- with .Values.mongodb.extraArgs }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: mongo
+              containerPort: 27017
+          env:
+            # The official image creates this user in the `admin` database on
+            # first boot only — if the volume already has data, these are
+            # ignored. That is why the chart reuses the existing Secret's
+            # password on upgrade rather than generating a new one.
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mongo-cloud-pod.secretName" . }}
+                  key: username
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mongo-cloud-pod.secretName" . }}
+                  key: password
+            - name: MONGO_INITDB_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mongo-cloud-pod.secretName" . }}
+                  key: database
+            {{- with .Values.mongodb.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            # TCP, not `mongosh --eval 'db.adminCommand(...)'`: an exec probe
+            # would need credentials, and probe exec commands get no $(VAR)
+            # expansion. Auth is enforced on the connection regardless.
+            tcpSocket:
+              port: mongo
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: mongo
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: mongo
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.mongodb.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+            - name: configdb
+              mountPath: /data/configdb
+      volumes:
+        - name: configdb
+          emptyDir: {}
+        {{- if not .Values.mongodb.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+  {{- if .Values.mongodb.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "mongo-cloud-pod.labels" . | nindent 10 }}
+          app.kubernetes.io/component: server
+        {{- if .Values.mongodb.persistence.retainOnDelete }}
+        annotations:
+          helm.sh/resource-policy: keep
+        {{- end }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.mongodb.persistence.accessModes | nindent 10 }}
+        {{- if .Values.mongodb.persistence.storageClass }}
+        storageClassName: {{ .Values.mongodb.persistence.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.mongodb.persistence.size }}
+  {{- end }}
+{{- end }}

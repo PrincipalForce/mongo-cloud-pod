@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mongo-cloud-pod
+  labels:
+    app.kubernetes.io/part-of: mongo-cloud-pod
+    # Baseline would be enough for the gateway, but the whole bundle runs
+    # non-root with ALL capabilities dropped and no privilege escalation, so
+    # it already satisfies restricted. Enforcing it here means a future patch
+    # that loosens a securityContext is rejected by the API server rather than
+    # quietly accepted.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    # Lets other namespaces' NetworkPolicies target this one by name.
+    kubernetes.io/metadata.name: mongo-cloud-pod

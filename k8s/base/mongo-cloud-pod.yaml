@@ -1,0 +1,471 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# GENERATED FILE — DO NOT EDIT.
+#
+# Produced by scripts/render-manifests.sh from charts/mongo-cloud-pod.
+# Edit the chart and re-run the script; CI rejects a hand-edited copy.
+#
+# The password below is a placeholder. k8s/overlays/* replace the Secret, and
+# applying this base as-is gives you a database whose password is literally
+# "REPLACE_ME_BEFORE_APPLY".
+# ─────────────────────────────────────────────────────────────────────────────
+---
+# Source: mongo-cloud-pod/templates/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mongo-cloud-pod-endpoint
+  namespace: mongo-cloud-pod
+  labels:
+    helm.sh/chart: mongo-cloud-pod-0.1.0
+    app.kubernetes.io/name: mongo-cloud-pod
+    app.kubernetes.io/instance: mongo-cloud-pod
+    app.kubernetes.io/version: "2"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: mongo-cloud-pod
+    mongo-cloud-pod.io/engine: ferretdb
+  annotations:
+    
+spec:
+  podSelector:
+    matchLabels:
+      mongo-cloud-pod.io/endpoint: "true"
+      app.kubernetes.io/instance: mongo-cloud-pod
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Same namespace, always — this is where the application that owns the
+        # database normally lives.
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 27017
+---
+# Source: mongo-cloud-pod/templates/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mongo-cloud-pod-storage
+  namespace: mongo-cloud-pod
+  labels:
+    helm.sh/chart: mongo-cloud-pod-0.1.0
+    app.kubernetes.io/name: mongo-cloud-pod
+    app.kubernetes.io/instance: mongo-cloud-pod
+    app.kubernetes.io/version: "2"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: mongo-cloud-pod
+    mongo-cloud-pod.io/engine: ferretdb
+  annotations:
+    
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mongo-cloud-pod
+      app.kubernetes.io/instance: mongo-cloud-pod
+      app.kubernetes.io/component: storage
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mongo-cloud-pod
+              app.kubernetes.io/instance: mongo-cloud-pod
+              app.kubernetes.io/component: gateway
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: mongo-cloud-pod
+              app.kubernetes.io/instance: mongo-cloud-pod
+              app.kubernetes.io/component: backup
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+# Source: mongo-cloud-pod/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongo-cloud-pod
+  namespace: mongo-cloud-pod
+  labels:
+    helm.sh/chart: mongo-cloud-pod-0.1.0
+    app.kubernetes.io/name: mongo-cloud-pod
+    app.kubernetes.io/instance: mongo-cloud-pod
+    app.kubernetes.io/version: "2"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: mongo-cloud-pod
+    mongo-cloud-pod.io/engine: ferretdb
+  annotations:
+    
+    # The password is read back from this Secret on upgrade. Keeping it when the
+    # release is deleted means a reinstall into the same namespace recovers the
+    # credential that the retained PVC's data was written with.
+    helm.sh/resource-policy: keep
+type: Opaque
+stringData:
+  username: "mongouser"
+  password: "REPLACE_ME_BEFORE_APPLY"
+  database: "appdb"
+  host: "mongo-cloud-pod"
+  port: "27017"
+  # What an application should consume. Identical shape in both engine modes.
+  connectionString: "mongodb://mongouser:REPLACE_ME_BEFORE_APPLY@mongo-cloud-pod:27017/appdb"
+  # Internal: how the gateway reaches its storage node. DocumentDB lives in the
+  # `postgres` database; the tenant's logical database is created inside it by
+  # FerretDB on first write.
+  postgresUrl: "postgres://mongouser:REPLACE_ME_BEFORE_APPLY@mongo-cloud-pod-postgres:5432/postgres"
+---
+# Source: mongo-cloud-pod/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo-cloud-pod
+  namespace: mongo-cloud-pod
+  labels:
+    helm.sh/chart: mongo-cloud-pod-0.1.0
+    app.kubernetes.io/name: mongo-cloud-pod
+    app.kubernetes.io/instance: mongo-cloud-pod
+    app.kubernetes.io/version: "2"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: mongo-cloud-pod
+    mongo-cloud-pod.io/engine: ferretdb
+    app.kubernetes.io/component: endpoint
+  annotations:
+    
+spec:
+  type: ClusterIP
+  ports:
+    - name: mongo
+      port: 27017
+      targetPort: mongo
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: mongo-cloud-pod
+    app.kubernetes.io/instance: mongo-cloud-pod
+    mongo-cloud-pod.io/endpoint: "true"
+---
+# Source: mongo-cloud-pod/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo-cloud-pod-postgres
+  namespace: mongo-cloud-pod
+  labels:
+    helm.sh/chart: mongo-cloud-pod-0.1.0
+    app.kubernetes.io/name: mongo-cloud-pod
+    app.kubernetes.io/instance: mongo-cloud-pod
+    app.kubernetes.io/version: "2"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: mongo-cloud-pod
+    mongo-cloud-pod.io/engine: ferretdb
+    app.kubernetes.io/component: storage
+  annotations:
+    
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: mongo-cloud-pod
+    app.kubernetes.io/instance: mongo-cloud-pod
+    app.kubernetes.io/component: storage
+---
+# Source: mongo-cloud-pod/templates/gateway-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo-cloud-pod-gateway
+  namespace: mongo-cloud-pod
+  labels:
+    helm.sh/chart: mongo-cloud-pod-0.1.0
+    app.kubernetes.io/name: mongo-cloud-pod
+    app.kubernetes.io/instance: mongo-cloud-pod
+    app.kubernetes.io/version: "2"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: mongo-cloud-pod
+    mongo-cloud-pod.io/engine: ferretdb
+    app.kubernetes.io/component: gateway
+  annotations:
+    
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongo-cloud-pod
+      app.kubernetes.io/instance: mongo-cloud-pod
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: mongo-cloud-pod-0.1.0
+        app.kubernetes.io/name: mongo-cloud-pod
+        app.kubernetes.io/instance: mongo-cloud-pod
+        app.kubernetes.io/version: "2"
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: mongo-cloud-pod
+        mongo-cloud-pod.io/engine: ferretdb
+        app.kubernetes.io/component: gateway
+        # Marks this workload as the thing that terminates the wire protocol.
+        # The Service on 27017 selects on this label, so the endpoint survives
+        # an engine switch unchanged. See _helpers.tpl.
+        mongo-cloud-pod.io/endpoint: "true"
+      annotations:
+        
+    spec:
+      
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 999
+        runAsGroup: 999
+        runAsNonRoot: true
+        runAsUser: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: "ghcr.io/ferretdb/ferretdb:2"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: mongo
+              containerPort: 27017
+            - name: debug
+              containerPort: 8088
+          env:
+            # Credentials come in as separate variables and are assembled into
+            # the DSN by Kubernetes' $(VAR) expansion below. That is what lets
+            # `auth.existingSecret` work: a user-supplied Secret holds
+            # username/password/database, and the chart never needs a
+            # pre-composed postgres:// key in it.
+            #
+            # Caveat for existingSecret users: the password is interpolated
+            # into a URI. Keep it alphanumeric, or percent-encode it yourself —
+            # an unencoded '@' or '/' will produce a DSN that parses wrong.
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: mongo-cloud-pod
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mongo-cloud-pod
+                  key: password
+            - name: FERRETDB_POSTGRESQL_URL
+              value: "postgres://$(PGUSER):$(PGPASSWORD)@mongo-cloud-pod-postgres:5432/postgres"
+            - name: FERRETDB_LISTEN_ADDR
+              value: "0.0.0.0:27017"
+            - name: FERRETDB_DEBUG_ADDR
+              value: "0.0.0.0:8088"
+            - name: FERRETDB_TELEMETRY
+              value: "disable"
+          startupProbe:
+            # The gateway comes up before Postgres is ready and retries its
+            # connection, so the only useful early signal is "is it listening".
+            tcpSocket:
+              port: mongo
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: mongo
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: mongo
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
+          # The gateway holds no state on disk, so unlike the storage node it
+          # can run with an immutable root filesystem. Merged rather than
+          # appended: emitting the key twice produces YAML that Helm and the
+          # API server accept but `kubectl kustomize` rejects outright.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# Source: mongo-cloud-pod/templates/postgres-statefulset.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo-cloud-pod-postgres
+  namespace: mongo-cloud-pod
+  labels:
+    helm.sh/chart: mongo-cloud-pod-0.1.0
+    app.kubernetes.io/name: mongo-cloud-pod
+    app.kubernetes.io/instance: mongo-cloud-pod
+    app.kubernetes.io/version: "2"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: mongo-cloud-pod
+    mongo-cloud-pod.io/engine: ferretdb
+    app.kubernetes.io/component: storage
+  annotations:
+    
+spec:
+  # Single writer. DocumentDB stores BSON in regular Postgres tables, so HA
+  # here means Postgres HA (streaming replication / CloudNativePG), not more
+  # replicas of this StatefulSet — two pods on one RWO volume will not start,
+  # and two pods on two volumes are two unrelated databases.
+  replicas: 1
+  serviceName: mongo-cloud-pod-postgres
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongo-cloud-pod
+      app.kubernetes.io/instance: mongo-cloud-pod
+      app.kubernetes.io/component: storage
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: mongo-cloud-pod-0.1.0
+        app.kubernetes.io/name: mongo-cloud-pod
+        app.kubernetes.io/instance: mongo-cloud-pod
+        app.kubernetes.io/version: "2"
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: mongo-cloud-pod
+        mongo-cloud-pod.io/engine: ferretdb
+        app.kubernetes.io/component: storage
+      annotations:
+        
+    spec:
+      
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 999
+        runAsGroup: 999
+        runAsNonRoot: true
+        runAsUser: 999
+        seccompProfile:
+          type: RuntimeDefault
+      # Postgres needs time to finish a checkpoint. The default 30s is enough
+      # for small databases; raise it if you see "database system was not
+      # properly shut down" in the logs after a node drain.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: storage
+          image: "ghcr.io/ferretdb/postgres-documentdb:17"
+          imagePullPolicy: IfNotPresent
+          args:
+            - -c
+            - shared_buffers=256MB
+            - -c
+            - max_connections=100
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mongo-cloud-pod
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mongo-cloud-pod
+                  key: password
+            # Not the tenant's database. DocumentDB installs its extension into
+            # `postgres`, and FerretDB creates the tenant's logical database
+            # inside it on first write. Pointing this at auth.database leaves
+            # the extension in a database the gateway never opens.
+            - name: POSTGRES_DB
+              value: postgres
+            # Keep PGDATA in a subdirectory of the mount: a PVC root often
+            # contains lost+found, and initdb refuses a non-empty directory.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          startupProbe:
+            # initdb plus the DocumentDB extension install can take a while on
+            # a cold volume with slow storage. A generous startup probe is what
+            # keeps the liveness probe from killing a first boot mid-initdb.
+            #
+            # No -U: probe exec commands get no $(VAR) expansion from the
+            # container's env (unlike command/args), so the username is not
+            # available here. pg_isready without it still answers the only
+            # question a probe asks — is the server accepting connections.
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432"]
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            # 5 failures, not 3: a long vacuum or checkpoint can make
+            # pg_isready slow without the server being unhealthy, and
+            # restarting a busy database makes that worse.
+            failureThreshold: 5
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: false
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            # Postgres writes sockets and temp files here; the image's default
+            # tmpfs-less setup would otherwise need a writable /run.
+            - name: run
+              mountPath: /var/run/postgresql
+      volumes:
+        - name: run
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          helm.sh/chart: mongo-cloud-pod-0.1.0
+          app.kubernetes.io/name: mongo-cloud-pod
+          app.kubernetes.io/instance: mongo-cloud-pod
+          app.kubernetes.io/version: "2"
+          app.kubernetes.io/managed-by: Helm
+          app.kubernetes.io/part-of: mongo-cloud-pod
+          mongo-cloud-pod.io/engine: ferretdb
+          app.kubernetes.io/component: storage
+        annotations:
+          # StatefulSet PVCs already survive `helm uninstall`; this makes the
+          # intent explicit and survives a future switch to Helm-managed PVCs.
+          helm.sh/resource-policy: keep
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi

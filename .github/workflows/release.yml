@@ -1,0 +1,74 @@
+name: Release chart
+
+on:
+  push:
+    tags:
+      # Chart releases are tagged with the chart version: v0.1.0
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+  # For cosign keyless signing.
+  id-token: write
+
+jobs:
+  publish:
+    name: Package and publish to GHCR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: Tag matches Chart.yaml version
+        # A tag that disagrees with the chart's own version produces an
+        # artifact nobody can correlate with the repository.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          chart="$(helm show chart charts/mongo-cloud-pod | awk '/^version:/ {print $2}')"
+          if [ "${tag}" != "${chart}" ]; then
+            echo "tag ${tag} does not match Chart.yaml version ${chart}" >&2
+            exit 1
+          fi
+
+      - name: Re-run the licence guarantees before publishing
+        # Anything we publish carries the claim on the tin. Checking it here
+        # as well as in CI means a tag pushed from a branch that skipped CI
+        # still cannot ship an SSPL default.
+        run: ./scripts/verify-licenses.sh
+
+      - name: Package
+        run: helm package charts/mongo-cloud-pod --destination /tmp/dist
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Push
+        id: push
+        run: |
+          out=$(helm push /tmp/dist/mongo-cloud-pod-*.tgz oci://ghcr.io/${{ github.repository_owner }}/charts 2>&1)
+          echo "${out}"
+          digest=$(echo "${out}" | awk '/Digest:/ {print $2}')
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign the chart
+        # Keyless signing: the signature is tied to this workflow's identity,
+        # so a consumer can verify the chart was built here and nowhere else.
+        # Verification instructions live in SECURITY.md.
+        run: |
+          cosign sign --yes \
+            ghcr.io/${{ github.repository_owner }}/charts/mongo-cloud-pod@${{ steps.push.outputs.digest }}
+
+      - name: Draft GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: /tmp/dist/mongo-cloud-pod-*.tgz

@@ -1,0 +1,87 @@
+{{- include "mongo-cloud-pod.validate" . -}}
+{{- if .Values.tests.enabled }}
+{{/*
+`helm test <release>` — a real round-trip over the wire protocol, not a port
+check. It inserts a document, reads it back, builds an index, runs an
+aggregation and cleans up. If this passes, a MongoDB driver will work.
+*/}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "mongo-cloud-pod.fullname" . }}-test-connection
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  {{- include "mongo-cloud-pod.imagePullSecrets" . | nindent 2 }}
+  automountServiceAccountToken: false
+  securityContext:
+    {{- toYaml .Values.podSecurityContext | nindent 4 }}
+  containers:
+    - name: mongosh
+      image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
+      imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
+      env:
+        - name: CONN
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "mongo-cloud-pod.secretName" . }}
+              {{- if .Values.auth.existingSecret }}
+              # A user-supplied Secret is not required to contain a composed
+              # connection string, so point the test at the key you use.
+              key: connectionString
+              optional: true
+              {{- else }}
+              key: connectionString
+              {{- end }}
+      command:
+        - /bin/sh
+        - -ec
+        - |
+          if [ -z "${CONN}" ]; then
+            echo "no connectionString key in the credentials Secret;" \
+                 "skipping (set one when using auth.existingSecret)" >&2
+            exit 0
+          fi
+          mongosh "${CONN}" --quiet --eval '
+            const c = db.getSiblingDB(db.getName()).mongoCloudPodTest;
+            c.drop();
+            c.insertMany([
+              { _id: 1, team: "a", n: 3 },
+              { _id: 2, team: "a", n: 4 },
+              { _id: 3, team: "b", n: 5 },
+            ]);
+            assert.strictEqual(c.countDocuments({}), 3, "insert/count mismatch");
+
+            // Index creation exercises the storage layer, not just the wire
+            // protocol — it is the first thing to break on a half-initialised
+            // DocumentDB extension.
+            c.createIndex({ team: 1, n: -1 });
+
+            const agg = c.aggregate([
+              { $match: { team: "a" } },
+              { $group: { _id: "$team", total: { $sum: "$n" } } },
+            ]).toArray();
+            assert.strictEqual(agg[0].total, 7, "aggregation mismatch");
+
+            const one = c.findOne({ _id: 3 });
+            assert.strictEqual(one.team, "b", "findOne mismatch");
+
+            c.updateOne({ _id: 3 }, { $set: { n: 10 } });
+            assert.strictEqual(c.findOne({ _id: 3 }).n, 10, "update mismatch");
+
+            c.deleteOne({ _id: 3 });
+            assert.strictEqual(c.countDocuments({}), 2, "delete mismatch");
+
+            c.drop();
+            print("mongo-cloud-pod: wire protocol OK (" + db.getName() + ")");
+          '
+      securityContext:
+        {{- toYaml .Values.containerSecurityContext | nindent 8 }}
+{{- end }}

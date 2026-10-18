@@ -1,0 +1,36 @@
+name: Compatibility gap
+description: A MongoDB feature that doesn't work the way it does on MongoDB
+labels: [compatibility]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check docs/compatibility.md first. If it's listed as **supported**,
+        this is a bug and we want it. If it's listed as **not supported**,
+        file anyway — upstream FerretDB prioritises by demand and the list
+        moves.
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest mongosh snippet that reproduces it
+      render: javascript
+    validations:
+      required: true
+  - type: textarea
+    id: mongodb-behaviour
+    attributes:
+      label: What MongoDB does
+    validations:
+      required: true
+  - type: textarea
+    id: actual-behaviour
+    attributes:
+      label: What mongo-cloud-pod does
+    validations:
+      required: true
+  - type: input
+    id: chart-version
+    attributes:
+      label: Chart version
+    validations:
+      required: true

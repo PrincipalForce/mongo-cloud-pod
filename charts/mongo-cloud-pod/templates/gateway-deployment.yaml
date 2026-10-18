@@ -1,0 +1,123 @@
+{{- include "mongo-cloud-pod.validate" . -}}
+{{- if eq .Values.engine "ferretdb" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mongo-cloud-pod.gatewayName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.gateway.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mongo-cloud-pod.selectorLabels" (dict "ctx" . "component" "gateway") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mongo-cloud-pod.labels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+        # Marks this workload as the thing that terminates the wire protocol.
+        # The Service on 27017 selects on this label, so the endpoint survives
+        # an engine switch unchanged. See _helpers.tpl.
+        mongo-cloud-pod.io/endpoint: "true"
+      annotations:
+        {{- include "mongo-cloud-pod.annotations" . | nindent 8 }}
+        {{- with .Values.gateway.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- include "mongo-cloud-pod.imagePullSecrets" . | nindent 6 }}
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.gateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gateway.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.gateway.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          ports:
+            - name: mongo
+              containerPort: 27017
+            - name: debug
+              containerPort: {{ .Values.gateway.debugPort }}
+          env:
+            # Credentials come in as separate variables and are assembled into
+            # the DSN by Kubernetes' $(VAR) expansion below. That is what lets
+            # `auth.existingSecret` work: a user-supplied Secret holds
+            # username/password/database, and the chart never needs a
+            # pre-composed postgres:// key in it.
+            #
+            # Caveat for existingSecret users: the password is interpolated
+            # into a URI. Keep it alphanumeric, or percent-encode it yourself —
+            # an unencoded '@' or '/' will produce a DSN that parses wrong.
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mongo-cloud-pod.secretName" . }}
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mongo-cloud-pod.secretName" . }}
+                  key: password
+            - name: FERRETDB_POSTGRESQL_URL
+              value: "postgres://$(PGUSER):$(PGPASSWORD)@{{ include "mongo-cloud-pod.postgresName" . }}:5432/postgres"
+            - name: FERRETDB_LISTEN_ADDR
+              value: "0.0.0.0:27017"
+            - name: FERRETDB_DEBUG_ADDR
+              value: "0.0.0.0:{{ .Values.gateway.debugPort }}"
+            - name: FERRETDB_TELEMETRY
+              value: {{ ternary "enable" "disable" .Values.gateway.telemetry | quote }}
+            {{- with .Values.gateway.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            # The gateway comes up before Postgres is ready and retries its
+            # connection, so the only useful early signal is "is it listening".
+            tcpSocket:
+              port: mongo
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: mongo
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: mongo
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          # The gateway holds no state on disk, so unlike the storage node it
+          # can run with an immutable root filesystem. Merged rather than
+          # appended: emitting the key twice produces YAML that Helm and the
+          # API server accept but `kubectl kustomize` rejects outright.
+          securityContext:
+            {{- toYaml (merge (dict "readOnlyRootFilesystem" true) (deepCopy .Values.containerSecurityContext)) | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

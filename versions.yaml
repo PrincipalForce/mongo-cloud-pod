@@ -1,0 +1,111 @@
+# The single source of truth for the images mongo-cloud-pod offers.
+#
+# Two rules keep this file low-maintenance:
+#
+# 1. Tags float within a major, never below it. `postgres-documentdb:17` picks
+#    up patch releases (CVE fixes) on the next pod restart but can never move a
+#    deployment across a Postgres major — a major bump rewrites the on-disk data
+#    directory and would leave the pod in CrashLoopBackOff. Production
+#    deployments should pin the fully-qualified tag listed under `pinned`.
+#
+# 2. Every entry carries its upstream EOL date, and scripts/check-eol.sh turns
+#    an approaching EOL into a CI failure (see EOL_WARNING_DAYS). Nobody has to
+#    remember to check; CI brings it up months ahead of the day patches stop.
+#
+# EOL dates are upstream's, sourced from endoflife.date and project release
+# policies. Re-check when the guard starts failing.
+
+eolWarningDays: 180
+
+engines:
+  # ──────────────────────────────────────────────────────────────────────────
+  # Default engine. Every component is OSI-approved and carries no field-of-use
+  # restriction, so a deployment may be offered to third parties as a service.
+  # ──────────────────────────────────────────────────────────────────────────
+  ferretdb:
+    status: default
+    license: Apache-2.0
+    sspl: false
+    offerableAsService: true
+    wireProtocol: "5.0+"
+    components:
+      gateway:
+        versions:
+          - version: "2"
+            image: ghcr.io/ferretdb/ferretdb:2
+            pinned: ghcr.io/ferretdb/ferretdb:2.6.0
+            license: Apache-2.0
+            eol: "2027-06-30"
+            status: default
+            note: >-
+              FerretDB 2.x is a rewrite on top of the DocumentDB extension and
+              is far more compatible than 1.x. Do not mix a 1.x gateway with a
+              2.x storage image; the on-disk layout differs.
+      storage:
+        versions:
+          - version: "17"
+            image: ghcr.io/ferretdb/postgres-documentdb:17
+            pinned: ghcr.io/ferretdb/postgres-documentdb:17-0.106.0-ferretdb-2.6.0
+            license: PostgreSQL AND MIT
+            eol: "2029-11-08"
+            status: default
+            label: Postgres 17 + DocumentDB
+          - version: "16"
+            image: ghcr.io/ferretdb/postgres-documentdb:16
+            pinned: ghcr.io/ferretdb/postgres-documentdb:16-0.106.0-ferretdb-2.6.0
+            license: PostgreSQL AND MIT
+            eol: "2028-11-09"
+            status: available
+            label: Postgres 16 + DocumentDB
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Opt-in engine. 100% compatible because it *is* MongoDB — and therefore
+  # SSPL, which speaks directly to offering the program's functionality as a
+  # service. Requires `sspl.acknowledged: true`. See docs/licensing.md.
+  # ──────────────────────────────────────────────────────────────────────────
+  mongodb-community:
+    status: available
+    license: SSPL-1.0
+    sspl: true
+    offerableAsService: false
+    wireProtocol: native
+    requiresAcknowledgement: true
+    components:
+      server:
+        versions:
+          # Long-support majors only. MongoDB also ships rapid releases
+          # (8.1, 8.2, 8.3) with ~12-month support: 8.2 shipped 2025-09-30 and
+          # was EOL by 2026-07-31. Those do not belong in a catalog.
+          - version: "8"
+            image: mongo:8
+            pinned: mongo:8.0.17
+            license: SSPL-1.0
+            eol: "2029-10-31"
+            status: default
+          - version: "9"
+            image: mongo:9
+            pinned: mongo:9.0.2
+            license: SSPL-1.0
+            eol: "2031-10-31"
+            status: available
+            note: >-
+              Offerable but not the default — too new to hand to a workload by
+              accident.
+          - version: "7"
+            image: mongo:7
+            pinned: mongo:7.0.26
+            license: SSPL-1.0
+            eol: "2027-08-31"
+            status: deprecated
+
+# Used by `helm test` and scripts/smoke-test.sh only; never deployed as part of
+# a running database. mongosh is Apache-2.0 even though the server is not.
+tooling:
+  shell:
+    image: mongodb/mongodb-community-server:8.0-ubi8
+    shellOnlyImage: rtsp/mongosh:2.3.1
+    license: Apache-2.0
+    note: >-
+      scripts and the helm test hook invoke `mongosh` from a small image. If
+      your registry policy forbids MongoDB Inc. images entirely, set
+      `tests.image` to any image containing a MongoDB-compatible shell.

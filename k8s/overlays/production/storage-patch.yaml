@@ -1,0 +1,41 @@
+# Production storage: a named SSD class and room to grow.
+#
+# Note that volumeClaimTemplates are immutable on an existing StatefulSet —
+# this patch only takes effect on a first install. To grow an existing volume,
+# edit the PVC directly (if your CSI driver allows expansion) rather than the
+# StatefulSet; see docs/operations.md.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo-cloud-pod-postgres
+spec:
+  template:
+    spec:
+      containers:
+        - name: storage
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          args:
+            - "-c"
+            # ~25% of the memory limit, the usual starting point for Postgres.
+            - "shared_buffers=1GB"
+            - "-c"
+            - "max_connections=200"
+            - "-c"
+            # The gateway opens and holds connections; logging slow queries at
+            # the storage layer is how you find a missing DocumentDB index.
+            - "log_min_duration_statement=1000"
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 100Gi

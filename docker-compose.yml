@@ -1,0 +1,77 @@
+# Local development. Same two components as the Kubernetes deployment, same
+# port, same connection string shape — so code written against this works
+# unchanged against the chart.
+#
+#   cp .env.example .env
+#   docker compose up -d
+#   mongosh "mongodb://mongouser:localdevpassword@localhost:27017/appdb"
+#
+# For the SSPL engine instead (first-party local use; see docs/licensing.md):
+#   docker compose --profile mongodb-community up -d
+# Run one profile at a time — both bind 27017.
+
+services:
+  storage:
+    # Postgres with the DocumentDB extension preinstalled. Not interchangeable
+    # with the stock postgres image: without the extension the gateway starts,
+    # accepts connections and fails every write.
+    image: ghcr.io/ferretdb/postgres-documentdb:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${MONGO_USERNAME:-mongouser}
+      POSTGRES_PASSWORD: ${MONGO_PASSWORD:-localdevpassword}
+      # DocumentDB installs into `postgres`; the application's logical database
+      # is created inside it by FerretDB on first write.
+      POSTGRES_DB: postgres
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - storage-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${MONGO_USERNAME:-mongouser}", "-d", "postgres"]
+      interval: 5s
+      timeout: 5s
+      # initdb plus the extension install is slow on a cold volume; without a
+      # start_period the container is marked unhealthy before it finishes.
+      start_period: 60s
+      retries: 5
+    # Not published. Nothing outside this compose project should be speaking
+    # SQL to the storage node — uncomment only to inspect it with psql.
+    # ports:
+    #   - "5432:5432"
+
+  gateway:
+    image: ghcr.io/ferretdb/ferretdb:2
+    restart: unless-stopped
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      FERRETDB_POSTGRESQL_URL: postgres://${MONGO_USERNAME:-mongouser}:${MONGO_PASSWORD:-localdevpassword}@storage:5432/postgres
+      FERRETDB_LISTEN_ADDR: "0.0.0.0:27017"
+      FERRETDB_DEBUG_ADDR: "0.0.0.0:8088"
+      FERRETDB_TELEMETRY: disable
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+      # Metrics and health: http://localhost:8088/debug/metrics
+      - "8088:8088"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Opt-in SSPL engine, for parity testing against real MongoDB. Enabled only
+  # with `--profile mongodb-community`, so it never starts by accident.
+  # ──────────────────────────────────────────────────────────────────────────
+  mongodb:
+    profiles: ["mongodb-community"]
+    image: mongo:8
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME:-mongouser}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-localdevpassword}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-appdb}
+    volumes:
+      - mongodb-data:/data/db
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+
+volumes:
+  storage-data:
+  mongodb-data:

@@ -1,0 +1,266 @@
+# mongo-cloud-pod — default values
+#
+# The defaults deploy a working, authenticated, non-root, network-isolated
+# MongoDB-compatible database with a generated password and a 10Gi volume.
+# For production, set `postgres.persistence.storageClass`, turn on
+# `backup.enabled`, and pin images (see docs/versions.md).
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Engine
+# ───────────────────────────────────────────────────────────────────────────────
+# "ferretdb"          — default. FerretDB (Apache-2.0) over PostgreSQL
+#                       (PostgreSQL licence) + DocumentDB (MIT). No SSPL
+#                       component, so a deployment may be offered to third
+#                       parties as a service. Some MongoDB features are
+#                       unsupported — see docs/compatibility.md.
+#
+# "mongodb-community" — MongoDB Community Server. Perfect compatibility, and
+#                       SSPL-licensed: §13 obliges anyone offering the
+#                       program's functionality to third parties as a service
+#                       to publish the complete source of that service. Only
+#                       for your own first-party workloads, and it refuses to
+#                       render unless you set `sspl.acknowledged: true`.
+engine: ferretdb
+
+sspl:
+  # Required to be true when engine == "mongodb-community". There is no default
+  # that quietly says yes: an operator has to put their name to the licence
+  # terms, because the chart's authors cannot accept them on their behalf.
+  acknowledged: false
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Credentials
+# ───────────────────────────────────────────────────────────────────────────────
+auth:
+  username: mongouser
+  database: appdb
+  # Leave empty to generate a 24-character alphanumeric password on first
+  # install. On `helm upgrade` the existing Secret's password is read back and
+  # reused, so an upgrade never silently rotates the credential out from under
+  # a running app.
+  password: ""
+  # Bring your own Secret instead. Must contain keys: username, password,
+  # database. The chart will not create or manage it, and will build no
+  # connectionString — your app composes one from the keys.
+  existingSecret: ""
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Service — the stable endpoint on 27017, identical in both engine modes
+# ───────────────────────────────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 27017
+  annotations: {}
+  # Only honoured when type is LoadBalancer. Exposing a database to the
+  # internet is almost never what you want; prefer a sidecar/port-forward or a
+  # VPN. If you do it anyway, restrict loadBalancerSourceRanges.
+  loadBalancerSourceRanges: []
+
+# ───────────────────────────────────────────────────────────────────────────────
+# FerretDB gateway (engine: ferretdb) — stateless, safe to scale
+# ───────────────────────────────────────────────────────────────────────────────
+gateway:
+  image:
+    repository: ghcr.io/ferretdb/ferretdb
+    # Floats within FerretDB 2.x. Pin to a full version in production:
+    # see `pinned` in versions.yaml.
+    tag: "2"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  # Send usage telemetry to FerretDB Inc.? Off by default — a database should
+  # not phone home unless its operator opts in.
+  telemetry: false
+  # FerretDB's debug/metrics listener. Not exposed through the Service.
+  debugPort: 8088
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  extraEnv: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+# ───────────────────────────────────────────────────────────────────────────────
+# PostgreSQL + DocumentDB storage node (engine: ferretdb)
+# ───────────────────────────────────────────────────────────────────────────────
+postgres:
+  image:
+    repository: ghcr.io/ferretdb/postgres-documentdb
+    # The tag's major is the Postgres major. Moving it across a major rewrites
+    # the on-disk data directory and will CrashLoopBackOff — dump and restore
+    # instead (docs/operations.md).
+    tag: "17"
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 10Gi
+    # Leave empty for the cluster default. Use an SSD-backed class; this is an
+    # OLTP workload with fsync on the write path.
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    # Keep the PVC when the release is uninstalled. The default is to keep it:
+    # losing a database to `helm uninstall` is not a recoverable mistake.
+    retainOnDelete: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  # Appended to postgresql.conf via command-line flags. shared_buffers at ~25%
+  # of the memory limit is the usual starting point.
+  extraArgs:
+    - "-c"
+    - "shared_buffers=256MB"
+    - "-c"
+    - "max_connections=100"
+  extraEnv: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+# ───────────────────────────────────────────────────────────────────────────────
+# MongoDB Community server (engine: mongodb-community)
+# ───────────────────────────────────────────────────────────────────────────────
+mongodb:
+  image:
+    repository: mongo
+    # Long-support majors only. Rapid releases (8.1, 8.2…) get ~12 months of
+    # support and do not belong in a long-lived deployment.
+    tag: "8"
+    pullPolicy: IfNotPresent
+  persistence:
+    enabled: true
+    size: 10Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    retainOnDelete: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  # WiredTiger sizes its cache from the cgroup limit in recent versions, but
+  # being explicit avoids OOMKills on older ones. Omit to let mongod decide.
+  wiredTigerCacheSizeGB: ""
+  extraArgs: []
+  extraEnv: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Hardening
+# ───────────────────────────────────────────────────────────────────────────────
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 999
+  runAsGroup: 999
+  fsGroup: 999
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false   # Postgres and mongod both write outside the volume
+  capabilities:
+    drop:
+      - ALL
+
+# No API credential belongs in a database pod. If something can exec into this
+# container, a mounted ServiceAccount token would hand it the cluster API.
+automountServiceAccountToken: false
+
+networkPolicy:
+  # Default-deny ingress to 27017, then allow-list. A database reachable from
+  # every pod in the cluster is the normal way these get owned.
+  enabled: true
+  # Namespaces whose pods may connect. Empty means only pods in this release's
+  # own namespace.
+  allowedNamespaces: []
+  # Additional raw `from` selectors, merged verbatim into the ingress rule.
+  extraFrom: []
+  # Egress is left unrestricted by default; set to false and the gateway can
+  # still reach the storage node, nothing else.
+  allowAllEgress: true
+
+podDisruptionBudget:
+  # Only meaningful for the gateway (replicaCount > 1). A single-replica
+  # StatefulSet cannot be protected by a PDB without blocking node drains.
+  enabled: false
+  minAvailable: 1
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Backups
+# ───────────────────────────────────────────────────────────────────────────────
+backup:
+  enabled: false
+  schedule: "0 2 * * *"
+  # Number of successful/failed CronJob runs to keep in the API.
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # How many dump files to keep on the target. Older ones are pruned by the job.
+  retentionCount: 7
+  # "pvc" writes to a dedicated volume; "s3" streams to object storage using
+  # the credentials in `backup.s3.existingSecret`.
+  target: pvc
+  pvc:
+    size: 20Gi
+    storageClass: ""
+  s3:
+    bucket: ""
+    prefix: mongo-cloud-pod
+    region: us-east-1
+    # Set for MinIO / R2 / Wasabi. Empty means AWS S3.
+    endpoint: ""
+    # Must contain AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.
+    existingSecret: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Observability
+# ───────────────────────────────────────────────────────────────────────────────
+metrics:
+  serviceMonitor:
+    # Requires the Prometheus Operator CRDs to be installed.
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
+# ───────────────────────────────────────────────────────────────────────────────
+# `helm test` — a real insert/find round-trip through the wire protocol
+# ───────────────────────────────────────────────────────────────────────────────
+tests:
+  enabled: true
+  image:
+    repository: rtsp/mongosh
+    tag: "2.3.1"
+    pullPolicy: IfNotPresent
+
+# Extra labels/annotations applied to every object the chart creates.
+commonLabels: {}
+commonAnnotations: {}
+
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []

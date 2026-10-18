@@ -1,0 +1,64 @@
+mongo-cloud-pod
+Copyright 2026 PrincipalForce
+
+This product includes software developed at PrincipalForce
+(https://principalforce.com/), licensed under the Apache License,
+Version 2.0.
+
+----------------------------------------------------------------------
+Third-party components deployed by this project
+----------------------------------------------------------------------
+
+This repository contains no third-party source code. It deploys
+container images published by other projects, each under its own
+licence.
+
+Default engine (`engine: ferretdb`) — no SSPL component:
+
+  FerretDB — MongoDB wire-protocol gateway
+    Copyright FerretDB Inc. and contributors
+    Licensed under the Apache License, Version 2.0
+    https://github.com/FerretDB/FerretDB
+
+  DocumentDB — PostgreSQL extension providing BSON storage and indexing
+    Copyright Microsoft Corporation and contributors
+    Licensed under the MIT License
+    https://github.com/microsoft/documentdb
+
+  PostgreSQL — relational storage engine
+    Copyright The PostgreSQL Global Development Group
+    Licensed under the PostgreSQL License
+    https://www.postgresql.org/about/licence/
+
+Opt-in engine (`engine: mongodb-community`) — SSPL:
+
+  MongoDB Community Server
+    Copyright MongoDB, Inc.
+    Licensed under the Server Side Public License, Version 1
+    https://www.mongodb.com/licensing/server-side-public-license
+
+    The SSPL is not an OSI-approved open-source licence. This project
+    neither distributes nor relicenses MongoDB Community Server; the
+    chart merely references MongoDB Inc.'s published image, and only
+    when an operator explicitly sets `sspl.acknowledged: true`. Your
+    use of that image is governed by the SSPL directly, between you and
+    MongoDB, Inc. See docs/licensing.md.
+
+Test tooling only (never part of a running deployment):
+
+  mongosh — MongoDB Shell, used by `helm test` and scripts/smoke-test.sh
+    Copyright MongoDB, Inc.
+    Licensed under the Apache License, Version 2.0
+    https://github.com/mongodb-js/mongosh
+
+----------------------------------------------------------------------
+Trademarks
+----------------------------------------------------------------------
+
+MONGODB is a registered trademark of MongoDB, Inc. This project is not
+affiliated with, endorsed by, or sponsored by MongoDB, Inc. References
+to MongoDB describe wire-protocol and driver compatibility only.
+
+PostgreSQL is a registered trademark of the PostgreSQL Community
+Association of Canada. Kubernetes is a registered trademark of The
+Linux Foundation.

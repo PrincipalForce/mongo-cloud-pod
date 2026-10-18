@@ -1,0 +1,70 @@
+# Development overlay: small, disposable, and it keeps the placeholder
+# password from the base so `kubectl apply -k` works with no setup.
+#
+#   kubectl apply -k k8s/overlays/development
+#   kubectl -n mongo-cloud-dev port-forward svc/mongo-cloud-pod 27017:27017
+#   mongosh "mongodb://mongouser:REPLACE_ME_BEFORE_APPLY@localhost:27017/appdb"
+#
+# Do not use this overlay anywhere real: the password is in this repository.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mongo-cloud-dev
+
+# Deliberately no namePrefix. Two hostnames are baked into strings that
+# Kustomize's name reference rewriting does not reach: the gateway's
+# FERRETDB_POSTGRESQL_URL env var, and the connectionString in the Secret.
+# A prefix renames the Services but not those strings, and the result is a
+# gateway that cannot find its storage node — a confusing failure for a
+# cosmetic gain. Isolation comes from the namespace instead.
+
+resources:
+  - ../../base
+
+patches:
+  # The base Namespace enforces the `restricted` Pod Security Standard, which
+  # is correct and which this overlay keeps — relaxing security for local
+  # development is how a cluster ends up with a securityContext nobody can
+  # explain. Kustomize's `namespace:` above renames the object to
+  # mongo-cloud-dev, so there is nothing to patch here.
+  - target:
+      kind: StatefulSet
+      name: mongo-cloud-pod-postgres
+    patch: |
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: mongo-cloud-pod-postgres
+      spec:
+        template:
+          spec:
+            containers:
+              - name: storage
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 128Mi
+                  limits:
+                    cpu: "1"
+                    memory: 512Mi
+        volumeClaimTemplates:
+          - metadata:
+              name: data
+            spec:
+              accessModes:
+                - ReadWriteOnce
+              resources:
+                requests:
+                  storage: 1Gi
+
+  # NetworkPolicy on a local kind/minikube cluster is usually unenforced
+  # anyway; dropping it keeps `kubectl run -it --rm mongosh` working from any
+  # namespace while you poke at things.
+  - target:
+      kind: NetworkPolicy
+    patch: |
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: ignored
+      $patch: delete

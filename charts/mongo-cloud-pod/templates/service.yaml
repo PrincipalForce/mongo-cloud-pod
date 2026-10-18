@@ -1,0 +1,86 @@
+{{- include "mongo-cloud-pod.validate" . -}}
+{{/*
+The stable endpoint. Named after the release, selects on the engine-neutral
+`mongo-cloud-pod.io/endpoint` label, and always listens on 27017 — so an
+application's connection string is identical whether it is talking to the
+FerretDB gateway or to mongod, and survives switching between them.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mongo-cloud-pod.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+    app.kubernetes.io/component: endpoint
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+    {{- with .Values.service.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml .Values.service.loadBalancerSourceRanges | nindent 4 }}
+  {{- end }}
+  ports:
+    - name: mongo
+      port: {{ .Values.service.port }}
+      targetPort: mongo
+      protocol: TCP
+  selector:
+    {{- include "mongo-cloud-pod.endpointLabels" . | nindent 4 }}
+---
+{{- if eq .Values.engine "ferretdb" }}
+{{/*
+Headless Service backing the storage StatefulSet. Not for applications — it
+exists so the gateway (and backup jobs) can resolve a stable DNS name for the
+Postgres pod. Deliberately not exposed on 27017.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mongo-cloud-pod.postgresName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    {{- include "mongo-cloud-pod.selectorLabels" (dict "ctx" . "component" "storage") | nindent 4 }}
+{{- else }}
+{{/*
+Headless Service for the mongod StatefulSet — stable per-pod DNS, which is what
+a future replica-set mode will need.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mongo-cloud-pod.mongodbName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - name: mongo
+      port: 27017
+      targetPort: mongo
+      protocol: TCP
+  selector:
+    {{- include "mongo-cloud-pod.selectorLabels" (dict "ctx" . "component" "server") | nindent 4 }}
+{{- end }}

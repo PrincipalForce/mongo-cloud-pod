@@ -1,0 +1,92 @@
+# Preset for Launchmatic-style multi-tenant platforms.
+#
+# Apply on top of values.yaml:
+#   helm install db-<instanceId> charts/mongo-cloud-pod \
+#     -n team-<slug> -f values.yaml -f values-launchmatic.yaml \
+#     --set auth.existingSecret=db-<instanceId>-credentials
+#
+# The shape mirrors what db-worker's kubernetes.service.ts already does for
+# Postgres and Redis instances: one release per DatabaseInstance, in the team's
+# namespace, with credentials the platform generated and owns.
+
+# Non-negotiable here. A platform provisioning databases for other people is
+# the exact activity SSPL §13 reaches; the open engine is the only one that can
+# be offered as a service. Leaving sspl.acknowledged at false means an operator
+# who flips the engine by accident gets a render error, not a licence problem.
+engine: ferretdb
+sspl:
+  acknowledged: false
+
+auth:
+  # The platform mints credentials and writes the Secret itself, so the chart
+  # neither generates nor rotates them. Set this at install time:
+  #   --set auth.existingSecret=db-<instanceId>-credentials
+  # The Secret must hold: username, password, database (+ connectionString if
+  # you want `helm test` to work).
+  existingSecret: ""
+
+service:
+  type: ClusterIP
+  port: 27017
+
+# Tenant-scale defaults. A platform should override these per plan tier rather
+# than editing this file.
+gateway:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+postgres:
+  persistence:
+    size: 10Gi
+    retainOnDelete: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# Tenant isolation. Each team gets its own namespace, so same-namespace ingress
+# plus nothing else is the correct default — a tenant's database must not be
+# reachable from another tenant's pods.
+networkPolicy:
+  enabled: true
+  allowedNamespaces: []
+  allowAllEgress: false
+
+# No ServiceAccount token in a tenant database pod: the platform's /exec
+# endpoint runs commands in this container on behalf of the account owner.
+automountServiceAccountToken: false
+
+backup:
+  enabled: true
+  schedule: "0 3 * * *"
+  target: s3
+  retentionCount: 7
+  s3:
+    # Per-tenant prefix, matching the platform's backup-storage-key convention.
+    bucket: ""
+    prefix: "mongo-cloud-pod"
+    existingSecret: ""
+
+metrics:
+  serviceMonitor:
+    enabled: true
+
+# The platform runs its own provisioning verification; the Helm test hook would
+# just be a second pod per tenant to schedule and clean up.
+tests:
+  enabled: false
+
+commonLabels:
+  # Lets the platform's existing label selectors and cost attribution pick
+  # these up alongside its Postgres/Redis instances.
+  launchmatic.com/managed: "true"
+  launchmatic.com/engine: "MONGODB_COMPATIBLE"

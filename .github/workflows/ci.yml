@@ -1,0 +1,195 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Weekly, so that an approaching EOL or a regression in a floating image tag
+  # surfaces on a quiet Monday rather than inside someone's release.
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint and render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - name: helm lint
+        run: helm lint charts/mongo-cloud-pod
+
+      - name: Render every engine and feature combination
+        # Each of these has broken at least once in a way `helm lint` does not
+        # catch: lint renders default values only.
+        run: |
+          set -eux
+          helm template ci charts/mongo-cloud-pod > /dev/null
+          helm template ci charts/mongo-cloud-pod \
+            --set engine=mongodb-community --set sspl.acknowledged=true > /dev/null
+          helm template ci charts/mongo-cloud-pod --set backup.enabled=true > /dev/null
+          helm template ci charts/mongo-cloud-pod \
+            --set backup.enabled=true --set backup.target=s3 \
+            --set backup.s3.bucket=b --set backup.s3.existingSecret=s > /dev/null
+          helm template ci charts/mongo-cloud-pod \
+            --set metrics.serviceMonitor.enabled=true > /dev/null
+          helm template ci charts/mongo-cloud-pod \
+            --set podDisruptionBudget.enabled=true --set gateway.replicaCount=3 > /dev/null
+          helm template ci charts/mongo-cloud-pod \
+            --set networkPolicy.allowAllEgress=false \
+            --set 'networkPolicy.allowedNamespaces={app1,app2}' > /dev/null
+          helm template ci charts/mongo-cloud-pod -f charts/mongo-cloud-pod/values-launchmatic.yaml \
+            --set auth.existingSecret=creds > /dev/null
+
+      - name: Guard rails reject what they should
+        # A gate nobody tests is a gate that quietly stops working.
+        run: |
+          set -eu
+          assert_fails() {
+            if helm template ci charts/mongo-cloud-pod "$@" >/dev/null 2>&1; then
+              echo "expected render to fail: $*" >&2
+              exit 1
+            fi
+            echo "correctly rejected: $*"
+          }
+          assert_fails --set engine=mongodb-community
+          assert_fails --set engine=cosmosdb
+          assert_fails --set auth.password=p --set auth.existingSecret=s
+          assert_fails --set backup.enabled=true --set backup.target=s3
+          assert_fails --set podDisruptionBudget.enabled=true
+          assert_fails --set metrics.serviceMonitor.enabled=true \
+            --set engine=mongodb-community --set sspl.acknowledged=true
+
+      - name: Validate manifests against the Kubernetes API schema
+        run: |
+          curl -sSLo /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp
+          # -ignore-missing-schemas: ServiceMonitor is a Prometheus Operator
+          # CRD with no schema in the upstream catalog. Everything else is
+          # strictly validated, including unknown fields.
+          helm template ci charts/mongo-cloud-pod | \
+            /tmp/kubeconform -strict -summary -ignore-missing-schemas -
+          helm template ci charts/mongo-cloud-pod \
+            --set engine=mongodb-community --set sspl.acknowledged=true | \
+            /tmp/kubeconform -strict -summary -ignore-missing-schemas -
+
+      - name: Kustomize overlays build
+        run: |
+          set -eux
+          kubectl kustomize k8s/overlays/development > /dev/null
+          kubectl kustomize k8s/overlays/production > /dev/null
+
+      - name: Generated manifests match the chart
+        run: ./scripts/render-manifests.sh --check
+
+  licensing:
+    name: Licence guarantees
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+      - name: No SSPL component in a default deployment
+        run: ./scripts/verify-licenses.sh
+      - name: Offered versions are inside their support window
+        run: |
+          pip install --quiet pyyaml
+          ./scripts/check-eol.sh
+
+  e2e:
+    name: End to end (${{ matrix.engine }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: ferretdb
+            extra: ""
+          # The SSPL engine is tested because people use it, and a chart that
+          # renders but does not run is not much of a guarantee. Testing it
+          # does not make it the default, and CI is first-party use.
+          - engine: mongodb-community
+            extra: "--set sspl.acknowledged=true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: mongo-cloud-pod
+          # Pod Security `restricted` is enforced by the base namespace, so an
+          # older node image would hide a securityContext regression.
+          node_image: kindest/node:v1.31.0
+
+      - name: Install
+        run: |
+          helm install pod charts/mongo-cloud-pod \
+            --namespace mcp --create-namespace \
+            --set engine=${{ matrix.engine }} ${{ matrix.extra }} \
+            --set auth.password=ciPassword123 \
+            --wait --timeout 10m
+
+      - name: helm test (wire protocol round-trip)
+        run: helm test pod --namespace mcp --logs
+
+      - name: Full smoke test
+        run: |
+          kubectl -n mcp port-forward svc/pod-mongo-cloud-pod 27017:27017 &
+          # Wait for the forwarder rather than sleeping a fixed amount: a slow
+          # runner turns a sleep into a flaky test.
+          for _ in $(seq 1 30); do
+            (echo > /dev/tcp/127.0.0.1/27017) >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsSL https://downloads.mongodb.com/compass/mongosh-2.3.1-linux-x64.tgz \
+            | tar -xz --strip-components=2 -C /usr/local/bin
+          ./scripts/smoke-test.sh "mongodb://mongouser:ciPassword123@localhost:27017/appdb${{ matrix.engine == 'mongodb-community' && '?authSource=admin' || '' }}"
+
+      - name: Upgrade keeps the password and the data
+        # The regression this catches: a chart that regenerates the password on
+        # every `helm upgrade`, locking the application out at the next pod
+        # restart. See the lookup logic in templates/_helpers.tpl.
+        run: |
+          before=$(kubectl -n mcp get secret pod-mongo-cloud-pod -o jsonpath='{.data.password}')
+          helm upgrade pod charts/mongo-cloud-pod \
+            --namespace mcp \
+            --set engine=${{ matrix.engine }} ${{ matrix.extra }} \
+            --reuse-values --wait --timeout 10m
+          after=$(kubectl -n mcp get secret pod-mongo-cloud-pod -o jsonpath='{.data.password}')
+          [ "$before" = "$after" ] || { echo "password changed across upgrade"; exit 1; }
+          helm test pod --namespace mcp --logs
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n mcp get all,pvc
+          kubectl -n mcp describe pods
+          kubectl -n mcp logs --all-containers --tail=200 --selector app.kubernetes.io/part-of=mongo-cloud-pod || true
+
+  compose:
+    name: Docker Compose
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - run: docker compose up -d --wait --wait-timeout 300
+      - run: |
+          curl -fsSL https://downloads.mongodb.com/compass/mongosh-2.3.1-linux-x64.tgz \
+            | tar -xz --strip-components=2 -C /usr/local/bin
+          ./scripts/smoke-test.sh
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down -v

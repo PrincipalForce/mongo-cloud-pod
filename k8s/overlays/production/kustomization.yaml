@@ -1,0 +1,55 @@
+# Production overlay: pinned images, real storage, a password you supply.
+#
+#   kubectl apply -k k8s/overlays/production
+#
+# Before you do: create the credentials Secret out of band. This overlay
+# deliberately does NOT carry one — a password in git is the failure mode this
+# whole directory exists to avoid.
+#
+#   kubectl create namespace mongo-cloud-pod
+#   kubectl -n mongo-cloud-pod create secret generic mongo-cloud-pod \
+#     --from-literal=username=mongouser \
+#     --from-literal=database=appdb \
+#     --from-literal=password="$(openssl rand -hex 16)" \
+#     --from-literal=host=mongo-cloud-pod \
+#     --from-literal=port=27017
+#   # connectionString, composed from the above:
+#   #   mongodb://mongouser:<password>@mongo-cloud-pod:27017/appdb
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mongo-cloud-pod
+
+resources:
+  - ../../base
+
+# The base's Secret holds the placeholder password. Dropping it here leaves the
+# workloads referencing a Secret you created yourself, with the same name.
+patches:
+  - target:
+      kind: Secret
+      name: mongo-cloud-pod
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: mongo-cloud-pod
+
+  - target:
+      kind: StatefulSet
+      name: mongo-cloud-pod-postgres
+    path: storage-patch.yaml
+
+images:
+  # Pin to full versions in production. A floating `:17` picks up patch
+  # releases on every pod restart, which is what you want for CVEs and not
+  # what you want during an incident.
+  - name: ghcr.io/ferretdb/postgres-documentdb
+    newTag: 17-0.106.0-ferretdb-2.6.0
+  - name: ghcr.io/ferretdb/ferretdb
+    newTag: 2.6.0
+
+replicas:
+  - name: mongo-cloud-pod-gateway
+    count: 2

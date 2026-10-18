@@ -1,0 +1,19 @@
+# Plain-manifest consumption path, for clusters where Helm is not in the
+# picture (Flux with Kustomize, `kubectl apply -k`, or a policy that forbids
+# in-cluster templating).
+#
+# mongo-cloud-pod.yaml is GENERATED from the Helm chart by
+# scripts/render-manifests.sh — edit the chart, not the output.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: mongo-cloud-pod
+
+resources:
+  - namespace.yaml
+  - mongo-cloud-pod.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: mongo-cloud-pod

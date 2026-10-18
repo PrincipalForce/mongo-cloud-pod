@@ -1,0 +1,69 @@
+{{ include "mongo-cloud-pod.fullname" . }} is installing.
+
+Engine: {{ .Values.engine }}
+{{- if eq .Values.engine "ferretdb" }}
+  FerretDB {{ .Values.gateway.image.tag }} (Apache-2.0)
+    over Postgres+DocumentDB {{ .Values.postgres.image.tag }} (PostgreSQL + MIT)
+  No SSPL component. This deployment may be offered to third parties
+  as a service.
+{{- else }}
+  MongoDB Community {{ .Values.mongodb.image.tag }} (SSPL-1.0)
+  ⚠ SSPL §13: offering this database's functionality to third parties as a
+    service obliges you to publish the complete source of that service under
+    the SSPL. You acknowledged this with sspl.acknowledged=true. For a
+    service-safe deployment, use the default engine (ferretdb).
+{{- end }}
+
+1. Wait for it to be ready:
+
+   kubectl rollout status {{ if eq .Values.engine "ferretdb" }}statefulset/{{ include "mongo-cloud-pod.postgresName" . }}{{ else }}statefulset/{{ include "mongo-cloud-pod.mongodbName" . }}{{ end }} -n {{ .Release.Namespace }}
+{{- if eq .Values.engine "ferretdb" }}
+   kubectl rollout status deployment/{{ include "mongo-cloud-pod.gatewayName" . }} -n {{ .Release.Namespace }}
+{{- end }}
+
+2. Get the connection string:
+{{- if .Values.auth.existingSecret }}
+
+   Credentials come from your own Secret "{{ .Values.auth.existingSecret }}".
+   Host: {{ include "mongo-cloud-pod.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+{{- else }}
+
+   kubectl get secret {{ include "mongo-cloud-pod.fullname" . }} -n {{ .Release.Namespace }} \
+     -o jsonpath='{.data.connectionString}' | base64 -d; echo
+
+   In-cluster hostname:
+     {{ include "mongo-cloud-pod.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+{{- end }}
+
+3. Verify it end to end (insert, index, aggregate, delete):
+
+   helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+4. Connect from your laptop:
+
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "mongo-cloud-pod.fullname" . }} 27017:{{ .Values.service.port }}
+   mongosh "mongodb://{{ .Values.auth.username }}:<password>@localhost:27017/{{ .Values.auth.database }}{{ if eq .Values.engine "mongodb-community" }}?authSource=admin{{ end }}"
+
+{{- if not .Values.backup.enabled }}
+
+⚠ Backups are off (backup.enabled=false). Before this holds anything you care
+  about, turn them on — see docs/operations.md.
+{{- end }}
+{{- if not .Values.postgres.persistence.storageClass }}
+{{- if eq .Values.engine "ferretdb" }}
+
+ℹ No storageClass set; using the cluster default. Confirm it is SSD-backed —
+  this is an OLTP workload with fsync on the write path.
+{{- end }}
+{{- end }}
+{{- if eq .Values.service.type "LoadBalancer" }}
+
+⚠ service.type=LoadBalancer exposes port 27017 outside the cluster.
+  {{ if .Values.service.loadBalancerSourceRanges }}Source ranges are restricted — good.{{ else }}No loadBalancerSourceRanges set: this will be reachable from anywhere the LB is.{{ end }}
+{{- end }}
+{{- if eq .Values.engine "ferretdb" }}
+
+Compatibility: change streams, sharding, $out/$merge, GridFS and server-side
+JavaScript are not supported by this engine. Full list:
+https://github.com/PrincipalForce/mongo-cloud-pod/blob/main/docs/compatibility.md
+{{- end }}

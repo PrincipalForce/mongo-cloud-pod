@@ -1,0 +1,57 @@
+{{- include "mongo-cloud-pod.validate" . -}}
+{{- if .Values.metrics.serviceMonitor.enabled }}
+{{- if ne .Values.engine "ferretdb" }}
+{{- fail "mongo-cloud-pod: metrics.serviceMonitor is only available for engine ferretdb — mongod exposes no Prometheus endpoint without a separate exporter sidecar." }}
+{{- end }}
+{{/*
+Scrapes FerretDB's debug listener. Deliberately a second, non-public Service:
+the application-facing Service must expose 27017 and nothing else, or a
+misconfigured scrape target turns into a path to the database port.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mongo-cloud-pod.gatewayName" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: {{ .Values.gateway.debugPort }}
+      targetPort: debug
+      protocol: TCP
+  selector:
+    {{- include "mongo-cloud-pod.selectorLabels" (dict "ctx" . "component" "gateway") | nindent 4 }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "mongo-cloud-pod.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    # Matches the metrics Service above (component: metrics), not the gateway
+    # pods — a ServiceMonitor selects Services.
+    matchLabels:
+      {{- include "mongo-cloud-pod.selectorLabels" (dict "ctx" . "component" "metrics") | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: /debug/metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.metrics.serviceMonitor.scrapeTimeout }}
+{{- end }}

@@ -1,0 +1,175 @@
+{{- include "mongo-cloud-pod.validate" . -}}
+{{- if .Values.backup.enabled }}
+{{- $dumpImage := "" -}}
+{{- if eq .Values.engine "ferretdb" -}}
+{{/* The storage image already contains pg_dump at exactly the server's major
+     version. Mixing client majors is the usual source of "server version
+     mismatch" dump failures, so never substitute a generic postgres image. */}}
+{{- $dumpImage = printf "%s:%s" .Values.postgres.image.repository .Values.postgres.image.tag -}}
+{{- else -}}
+{{/* mongodump ships with the server image for 8.x and later. */}}
+{{- $dumpImage = printf "%s:%s" .Values.mongodb.image.repository .Values.mongodb.image.tag -}}
+{{- end -}}
+{{- if eq .Values.backup.target "pvc" }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "mongo-cloud-pod.fullname" . }}-backups
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+    # Backups outliving the release is the entire point.
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    - ReadWriteOnce
+  {{- if .Values.backup.pvc.storageClass }}
+  storageClassName: {{ .Values.backup.pvc.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.pvc.size }}
+---
+{{- end }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "mongo-cloud-pod.fullname" . }}-backup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mongo-cloud-pod.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+  annotations:
+    {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  # A missed window (node pressure, cluster upgrade) should run late rather
+  # than be skipped silently.
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels:
+            {{- include "mongo-cloud-pod.labels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          restartPolicy: OnFailure
+          {{- include "mongo-cloud-pod.imagePullSecrets" . | nindent 10 }}
+          automountServiceAccountToken: false
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- if eq .Values.backup.target "s3" }}
+          {{/*
+          Two stages, because no database image ships the AWS CLI and no AWS
+          image ships pg_dump. An initContainer runs to completion before the
+          main container starts, which gives a dump-then-upload ordering that
+          two parallel containers in a Job could not.
+          */}}
+          initContainers:
+            - name: dump
+              image: {{ $dumpImage | quote }}
+              imagePullPolicy: IfNotPresent
+              env:
+                {{- include "mongo-cloud-pod.backupEnv" . | nindent 16 }}
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  {{- include "mongo-cloud-pod.dumpScript" . | nindent 18 }}
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          containers:
+            - name: upload
+              image: public.ecr.aws/aws-cli/aws-cli:2
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: S3_BUCKET
+                  value: {{ .Values.backup.s3.bucket | quote }}
+                - name: S3_PREFIX
+                  value: {{ .Values.backup.s3.prefix | quote }}
+                - name: AWS_DEFAULT_REGION
+                  value: {{ .Values.backup.s3.region | quote }}
+                {{- with .Values.backup.s3.endpoint }}
+                - name: S3_ENDPOINT
+                  value: {{ . | quote }}
+                {{- end }}
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.backup.s3.existingSecret }}
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  # The initContainer left exactly one file here.
+                  FILE="$(ls -1 /backups | head -n 1)"
+                  if [ -z "${FILE}" ]; then
+                    echo "no dump produced — failing loudly rather than" \
+                         "recording a successful backup of nothing" >&2
+                    exit 1
+                  fi
+                  aws s3 cp "/backups/${FILE}" \
+                    "s3://${S3_BUCKET}/${S3_PREFIX}/${FILE}" \
+                    ${S3_ENDPOINT:+--endpoint-url "${S3_ENDPOINT}"}
+                  echo "uploaded s3://${S3_BUCKET}/${S3_PREFIX}/${FILE}"
+                  # Retention on the bucket side is a lifecycle policy, not our
+                  # job — see docs/operations.md.
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          {{- else }}
+          containers:
+            - name: dump
+              image: {{ $dumpImage | quote }}
+              imagePullPolicy: IfNotPresent
+              env:
+                {{- include "mongo-cloud-pod.backupEnv" . | nindent 16 }}
+                - name: RETENTION
+                  value: {{ .Values.backup.retentionCount | quote }}
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  {{- include "mongo-cloud-pod.dumpScript" . | nindent 18 }}
+                  # Prune oldest-first beyond the retention count. `ls -1t`
+                  # sorts by mtime, so a file restored in place counts as new,
+                  # which is the behaviour you want.
+                  ls -1t /backups/ | tail -n "+$((RETENTION + 1))" | while read -r old; do
+                    echo "pruning ${old}"
+                    rm -f "/backups/${old}"
+                  done
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              securityContext:
+                {{- toYaml .Values.containerSecurityContext | nindent 16 }}
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          {{- end }}
+          volumes:
+            - name: backups
+              {{- if eq .Values.backup.target "pvc" }}
+              persistentVolumeClaim:
+                claimName: {{ include "mongo-cloud-pod.fullname" . }}-backups
+              {{- else }}
+              # S3 target: the dump is staged here only long enough to upload,
+              # so size the node's ephemeral storage against your database.
+              emptyDir: {}
+              {{- end }}
+{{- end }}

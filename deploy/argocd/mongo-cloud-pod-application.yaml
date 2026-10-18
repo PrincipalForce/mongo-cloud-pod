@@ -1,0 +1,58 @@
+# GitOps deployment via Argo CD.
+#
+#   kubectl apply -f deploy/argocd/mongo-cloud-pod-application.yaml
+#
+# Credentials are deliberately NOT in this file. Create the Secret out of band
+# (or with External Secrets / Sealed Secrets) and point auth.existingSecret at
+# it — a password in a Git-synced manifest is a password in Git.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mongo-cloud-pod
+  namespace: argocd
+  annotations:
+    # Databases should settle before whatever depends on them syncs.
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/PrincipalForce/mongo-cloud-pod.git
+    targetRevision: v0.1.0        # pin a tag; `main` moves under you
+    path: charts/mongo-cloud-pod
+    helm:
+      valueFiles:
+        - values.yaml
+      parameters:
+        - name: auth.existingSecret
+          value: mongo-cloud-pod-credentials
+        - name: postgres.persistence.size
+          value: 50Gi
+        - name: backup.enabled
+          value: "true"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: mongo-cloud-pod
+  syncPolicy:
+    automated:
+      # prune: false, deliberately. Self-healing a database by deleting
+      # objects is not a behaviour you want discovering an edge case at 3am;
+      # removals here should be a human action.
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+  ignoreDifferences:
+    # Volume sizes drift legitimately: a PVC expanded in place no longer
+    # matches the StatefulSet template it was created from, and Argo should not
+    # try to "fix" that.
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/volumeClaimTemplates

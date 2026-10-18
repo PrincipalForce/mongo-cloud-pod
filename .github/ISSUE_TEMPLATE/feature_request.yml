@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest a capability or configuration option
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Out of scope, so you don't spend time writing it up: anything that
+        puts an SSPL image in the default path, vendoring upstream source, or
+        an operator/CRD. See CONTRIBUTING.md.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do that you can't today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like instead?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What have you tried or considered?

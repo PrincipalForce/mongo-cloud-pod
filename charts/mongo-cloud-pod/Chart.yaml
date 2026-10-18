@@ -1,0 +1,44 @@
+apiVersion: v2
+name: mongo-cloud-pod
+description: >-
+  MongoDB wire-protocol database for Kubernetes with no SSPL component.
+  FerretDB over PostgreSQL + DocumentDB by default; optional opt-in MongoDB
+  Community engine for first-party self-hosted use.
+type: application
+
+# version  — the chart's own semver. Bump on every change to templates/values.
+# appVersion — the default engine's user-facing version (FerretDB major).
+version: 0.1.0
+appVersion: "2"
+
+kubeVersion: ">=1.25.0-0"
+
+home: https://github.com/PrincipalForce/mongo-cloud-pod
+sources:
+  - https://github.com/PrincipalForce/mongo-cloud-pod
+  - https://github.com/FerretDB/FerretDB
+  - https://github.com/microsoft/documentdb
+
+keywords:
+  - mongodb
+  - mongodb-compatible
+  - ferretdb
+  - documentdb
+  - postgresql
+  - document-database
+  - open-source
+
+maintainers:
+  - name: PrincipalForce
+    url: https://principalforce.com
+
+annotations:
+  # SPDX expression for the chart itself. The images it deploys carry their own
+  # licences — see the NOTICE file and versions.yaml.
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/signKey: |
+    fingerprint: see SECURITY.md
+  artifacthub.io/changes: |
+    - kind: added
+      description: Initial release — FerretDB and MongoDB Community engines
