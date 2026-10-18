@@ -16,7 +16,13 @@ metadata:
   annotations:
     {{- include "mongo-cloud-pod.annotations" . | nindent 4 }}
     helm.sh/hook: test
-    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    # No `hook-succeeded` here, deliberately. With it, Helm deletes the pod the
+    # moment the test passes — and then `helm test --logs` fails with
+    # "pods not found" while reporting Phase: Succeeded, which is a confusing
+    # way to turn a passing test into a red build. `before-hook-creation`
+    # alone leaves the completed pod around for its logs to be read, and
+    # clears it at the start of the next run.
+    helm.sh/hook-delete-policy: before-hook-creation
 spec:
   restartPolicy: Never
   {{- include "mongo-cloud-pod.imagePullSecrets" . | nindent 2 }}
