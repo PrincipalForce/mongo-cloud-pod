@@ -270,6 +270,13 @@ tests:
 commonLabels: {}
 commonAnnotations: {}
 
+# The cluster's DNS domain. Internal hops (gateway to storage, backup jobs to
+# either) are addressed by fully-qualified name so a lookup costs one query
+# instead of walking the pod's ndots:5 search list — a SERVFAIL on any bogus
+# permutation in that list reaches a Go client as "server misbehaving", which
+# looks exactly like a database that is intermittently down.
+clusterDomain: cluster.local
+
 nameOverride: ""
 fullnameOverride: ""
 

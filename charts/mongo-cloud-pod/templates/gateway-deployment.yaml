@@ -80,7 +80,7 @@ spec:
                   name: {{ include "mongo-cloud-pod.secretName" . }}
                   key: password
             - name: FERRETDB_POSTGRESQL_URL
-              value: "postgres://$(PGUSER):$(PGPASSWORD)@{{ include "mongo-cloud-pod.postgresName" . }}:5432/postgres"
+              value: "postgres://$(PGUSER):$(PGPASSWORD)@{{ include "mongo-cloud-pod.postgresFqdn" . }}:5432/postgres"
             - name: FERRETDB_LISTEN_ADDR
               value: "0.0.0.0:27017"
             - name: FERRETDB_DEBUG_ADDR

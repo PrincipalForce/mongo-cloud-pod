@@ -84,6 +84,29 @@ Component object names.
 {{- end -}}
 
 {{/*
+Fully-qualified in-cluster DNS names for the internal hops.
+
+Short names are resolved through the pod's search list, which with the default
+ndots:5 means up to five queries per lookup — and a SERVFAIL on any one of the
+bogus permutations surfaces to a Go client as "server misbehaving", which is
+how an intermittently-flaky connection to a healthy database presents. The
+fully-qualified name resolves in one query.
+
+Call as: include "mongo-cloud-pod.fqdn" (dict "ctx" . "name" "<service>")
+*/}}
+{{- define "mongo-cloud-pod.fqdn" -}}
+{{- printf "%s.%s.svc.%s" .name .ctx.Release.Namespace .ctx.Values.clusterDomain -}}
+{{- end -}}
+
+{{- define "mongo-cloud-pod.postgresFqdn" -}}
+{{- include "mongo-cloud-pod.fqdn" (dict "ctx" . "name" (include "mongo-cloud-pod.postgresName" .)) -}}
+{{- end -}}
+
+{{- define "mongo-cloud-pod.mongodbFqdn" -}}
+{{- include "mongo-cloud-pod.fqdn" (dict "ctx" . "name" (include "mongo-cloud-pod.mongodbName" .)) -}}
+{{- end -}}
+
+{{/*
 The Secret holding credentials: either the user's own, or ours.
 */}}
 {{- define "mongo-cloud-pod.secretName" -}}
@@ -196,7 +219,7 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 # which a mongodump through the gateway does not see.
 FILE="/backups/${STAMP}.dump"
 pg_dump \
-  --host={{ include "mongo-cloud-pod.postgresName" . }} \
+  --host={{ include "mongo-cloud-pod.postgresFqdn" . }} \
   --username="${DB_USER}" \
   --dbname=postgres \
   --format=custom \
@@ -204,7 +227,7 @@ pg_dump \
 {{- else -}}
 FILE="/backups/${STAMP}.archive.gz"
 mongodump \
-  --host={{ include "mongo-cloud-pod.mongodbName" . }} \
+  --host={{ include "mongo-cloud-pod.mongodbFqdn" . }} \
   --port=27017 \
   --username="${DB_USER}" \
   --password="${PGPASSWORD}" \

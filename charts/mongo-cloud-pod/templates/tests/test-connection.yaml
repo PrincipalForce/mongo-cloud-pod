@@ -34,6 +34,11 @@ spec:
       image: "{{ .Values.tests.image.repository }}:{{ .Values.tests.image.tag }}"
       imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
       env:
+        # mongosh writes a config directory under $HOME; without this it tries
+        # /.mongodb and prints an EACCES warning into the test output, which
+        # reads like a failure in a run that passed.
+        - name: HOME
+          value: /tmp
         - name: CONN
           valueFrom:
             secretKeyRef:
